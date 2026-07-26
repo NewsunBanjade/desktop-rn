@@ -218,6 +218,34 @@ function isValidUuid(id: string): boolean {
   return uuidRegex.test(id)
 }
 
+function getExpectedCdnUrl(key: string): string {
+  if (!key) return ''
+  if (key.startsWith('http://') || key.startsWith('https://')) {
+    return key
+  }
+  let publicUrl = ''
+  if (window.api && typeof window.api.getEnv === 'function') {
+    const env = window.api.getEnv()
+    if (env && env.CLOUDFLARE_R2_PUBLIC_URL) {
+      publicUrl = env.CLOUDFLARE_R2_PUBLIC_URL
+    }
+  }
+  const cleanPublicUrl = publicUrl.replace(/\/$/, '')
+  const cleanKey = key.replace(/^\//, '')
+  return `${cleanPublicUrl}/${cleanKey}`
+}
+
+function getThumbnailKeyFromStorageKey(storageKey: string): string {
+  const parts = storageKey.split('/')
+  if (parts.length >= 3 && parts[1] === 'images') {
+    const newParts = [...parts]
+    newParts[1] = 'thumbnails'
+    newParts[2] = 'thumb_' + newParts[2]
+    return newParts.join('/')
+  }
+  return storageKey
+}
+
 // -------------------------------------------------------
 // Logging helpers (write to terminal + persistent log file)
 // -------------------------------------------------------
@@ -244,7 +272,7 @@ const NON_RETRYABLE_PG_CODES = new Set([
   '23505', // unique_violation
   '23514', // check_violation
   '42703', // undefined_column
-  '42P01', // undefined_table
+  '42P01' // undefined_table
 ])
 
 function isNonRetryable(err: unknown): boolean {
@@ -277,7 +305,10 @@ async function ensureAlbumExists(
     return // Album found — nothing to do
   }
 
-  writeLog('warn', `Album ${albumId} not found in Supabase. Attempting to recover from localStorage...`)
+  writeLog(
+    'warn',
+    `Album ${albumId} not found in Supabase. Attempting to recover from localStorage...`
+  )
 
   // 2. Try to find album details in localStorage
   const mockAlbums: Album[] = JSON.parse(localStorage.getItem(MOCK_ALBUMS_KEY) || '[]')
@@ -298,14 +329,15 @@ async function ensureAlbumExists(
       writeLog('info', `Album ${albumId} re-created in Supabase via secret key.`)
       return
     } catch (ipcErr: any) {
-      writeLog('warn', `Secret-key album re-create via IPC failed: ${ipcErr?.message}. Trying anon key...`)
+      writeLog(
+        'warn',
+        `Secret-key album re-create via IPC failed: ${ipcErr?.message}. Trying anon key...`
+      )
     }
   }
 
   // 4. Fallback: try with anon key (may fail on RLS but worth trying)
-  const { error: insertErr } = await supabase
-    .from('albums')
-    .insert([albumPayload])
+  const { error: insertErr } = await supabase.from('albums').insert([albumPayload])
   if (insertErr) {
     writeLog('error', `Could not re-create album ${albumId} in Supabase.`, {
       message: insertErr.message,
@@ -313,7 +345,7 @@ async function ensureAlbumExists(
     })
     throw new NonRetryableError(
       `Album ${albumId} does not exist in Supabase and could not be re-created. ` +
-      `Photo cannot be inserted (FK constraint). Removing from queue.`
+        `Photo cannot be inserted (FK constraint). Removing from queue.`
     )
   }
 
@@ -339,11 +371,7 @@ async function insertPhotoToSupabase(
 ): Promise<Record<string, unknown>> {
   // --- Attempt 1: renderer-side anon key ---
   try {
-    const { data, error } = await supabase
-      .from('photos')
-      .insert([payload])
-      .select()
-      .single()
+    const { data, error } = await supabase.from('photos').insert([payload]).select().single()
 
     if (error) {
       logError('insertPhotoToSupabase (anon key)', error)
@@ -353,15 +381,21 @@ async function insertPhotoToSupabase(
           `DB error ${(error as any).code} for ${payload.file_name}: ${(error as any).message}`
         )
       }
-      writeLog('warn', `Anon key insert failed for ${payload.file_name}, trying secret key fallback`, {
-        code: (error as any).code,
-        message: (error as any).message,
-        hint: (error as any).hint
-      })
+      writeLog(
+        'warn',
+        `Anon key insert failed for ${payload.file_name}, trying secret key fallback`,
+        {
+          code: (error as any).code,
+          message: (error as any).message,
+          hint: (error as any).hint
+        }
+      )
       throw error // fall through to attempt 2
     }
 
-    writeLog('info', `Renderer anon-key insert succeeded for ${payload.file_name}`, { id: data?.id })
+    writeLog('info', `Renderer anon-key insert succeeded for ${payload.file_name}`, {
+      id: data?.id
+    })
     return data as Record<string, unknown>
   } catch (_anonErr) {
     // Re-throw non-retryable errors immediately — don't attempt fallback
@@ -372,7 +406,9 @@ async function insertPhotoToSupabase(
       try {
         writeLog('info', `Attempting main-process secret-key insert for ${payload.file_name}`)
         const result = await window.api.supabaseInsertPhoto(payload)
-        writeLog('info', `Main-process secret-key insert succeeded for ${payload.file_name}`, { id: result?.id })
+        writeLog('info', `Main-process secret-key insert succeeded for ${payload.file_name}`, {
+          id: result?.id
+        })
         return result
       } catch (secretErr: any) {
         const errMsg: string = secretErr?.message || ''
@@ -380,7 +416,7 @@ async function insertPhotoToSupabase(
         if (errMsg.includes('foreign key constraint') || errMsg.includes('violates foreign key')) {
           throw new NonRetryableError(
             `FK constraint violation for ${payload.file_name} (album_id: ${payload.album_id}). ` +
-            `Parent album missing in Supabase.`
+              `Parent album missing in Supabase.`
           )
         }
         writeLog('error', `Main-process secret-key insert also failed for ${payload.file_name}`, {
@@ -393,8 +429,14 @@ async function insertPhotoToSupabase(
       }
     } else {
       // No fallback available
-      writeLog('error', `No secret-key fallback available. Supabase insert failed for ${payload.file_name}`, { payload })
-      throw new Error(`Supabase insert failed for ${payload.file_name} and no secret key fallback available`)
+      writeLog(
+        'error',
+        `No secret-key fallback available. Supabase insert failed for ${payload.file_name}`,
+        { payload }
+      )
+      throw new Error(
+        `Supabase insert failed for ${payload.file_name} and no secret key fallback available`
+      )
     }
   }
 }
@@ -430,20 +472,37 @@ export async function syncPendingPhotos(): Promise<void> {
 
     for (const item of [...pending]) {
       if (!isValidUuid(item.album_id)) {
-        writeLog('warn', `Skipping item — album_id "${item.album_id}" is not a valid UUID.`, { file_name: item.file_name })
+        writeLog('warn', `Skipping item — album_id "${item.album_id}" is not a valid UUID.`, {
+          file_name: item.file_name
+        })
         // Remove invalid item so we don't retry forever
-        const current: PendingPhoto[] = JSON.parse(localStorage.getItem('rn_pending_supabase_photos') || '[]')
-        localStorage.setItem('rn_pending_supabase_photos', JSON.stringify(current.filter((p) => p.id !== item.id)))
+        const current: PendingPhoto[] = JSON.parse(
+          localStorage.getItem('rn_pending_supabase_photos') || '[]'
+        )
+        localStorage.setItem(
+          'rn_pending_supabase_photos',
+          JSON.stringify(current.filter((p) => p.id !== item.id))
+        )
         continue
       }
 
       const payload = {
         album_id: item.album_id,
         file_name: item.file_name,
-        public_url: item.public_url,
+        public_url:
+          item.public_url.startsWith('http://') || item.public_url.startsWith('https://')
+            ? item.public_url
+            : getExpectedCdnUrl(item.storage_key),
         storage_key: item.storage_key,
-        thumbnail: item.thumbnail,
-        cdn: item.public_url,
+        thumbnail:
+          item.thumbnail &&
+          (item.thumbnail.startsWith('http://') || item.thumbnail.startsWith('https://'))
+            ? item.thumbnail
+            : getExpectedCdnUrl(getThumbnailKeyFromStorageKey(item.storage_key)),
+        cdn:
+          item.public_url.startsWith('http://') || item.public_url.startsWith('https://')
+            ? item.public_url
+            : getExpectedCdnUrl(item.storage_key),
         is_featured: item.is_featured,
         created_at: item.created_at
       }
@@ -457,24 +516,38 @@ export async function syncPendingPhotos(): Promise<void> {
         // Use the explicit setFeaturedImage() to mark a photo as featured.
 
         // Remove from pending list only after confirmed success
-        const updated: PendingPhoto[] = JSON.parse(localStorage.getItem('rn_pending_supabase_photos') || '[]')
+        const updated: PendingPhoto[] = JSON.parse(
+          localStorage.getItem('rn_pending_supabase_photos') || '[]'
+        )
         const filtered = updated.filter((p) => p.id !== item.id)
         localStorage.setItem('rn_pending_supabase_photos', JSON.stringify(filtered))
 
-        writeLog('info', `Sync queue: Successfully synced ${item.file_name} to Supabase.`, { id: insertedRow?.id })
+        writeLog('info', `Sync queue: Successfully synced ${item.file_name} to Supabase.`, {
+          id: insertedRow?.id
+        })
       } catch (err: any) {
         if (isNonRetryable(err)) {
           // This item can never succeed — remove from queue and log
-          writeLog('error',
+          writeLog(
+            'error',
             `NON-RETRYABLE: Removing "${item.file_name}" from sync queue permanently. Reason: ${err?.message}`,
             { album_id: item.album_id, file_name: item.file_name, public_url: item.public_url }
           )
-          const current: PendingPhoto[] = JSON.parse(localStorage.getItem('rn_pending_supabase_photos') || '[]')
-          localStorage.setItem('rn_pending_supabase_photos', JSON.stringify(current.filter((p) => p.id !== item.id)))
+          const current: PendingPhoto[] = JSON.parse(
+            localStorage.getItem('rn_pending_supabase_photos') || '[]'
+          )
+          localStorage.setItem(
+            'rn_pending_supabase_photos',
+            JSON.stringify(current.filter((p) => p.id !== item.id))
+          )
         } else {
-          writeLog('error', `Sync queue: Failed to sync ${item.file_name}. Will retry next cycle.`, {
-            message: err?.message
-          })
+          writeLog(
+            'error',
+            `Sync queue: Failed to sync ${item.file_name}. Will retry next cycle.`,
+            {
+              message: err?.message
+            }
+          )
         }
         // Don't break — try the rest of the pending items
       }
@@ -523,11 +596,29 @@ export async function realR2Upload(
 
   if (window.api && typeof window.api.uploadToR2 === 'function') {
     const arrayBuffer = await fileBlob.arrayBuffer()
-    if (onProgress) onProgress(40)
-    const fileUrl = await window.api.uploadToR2(key, arrayBuffer, fileBlob.type || 'image/jpeg')
-    if (onProgress) onProgress(100)
-    console.log(`[R2 Upload] Completed! Public URL: ${fileUrl}`)
-    return fileUrl
+    const maxAttempts = 3
+    let lastError: any = null
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        if (attempt > 1) {
+          console.warn(
+            `[R2 Upload] Retrying upload for ${key} (Attempt ${attempt}/${maxAttempts})...`
+          )
+          // Delay of 1.5 seconds before retry
+          await new Promise((resolve) => setTimeout(resolve, 1500))
+        }
+        if (onProgress) onProgress(40 + (attempt - 1) * 10)
+        const fileUrl = await window.api.uploadToR2(key, arrayBuffer, fileBlob.type || 'image/jpeg')
+        if (onProgress) onProgress(100)
+        console.log(`[R2 Upload] Completed! Public URL: ${fileUrl}`)
+        return fileUrl
+      } catch (err) {
+        lastError = err
+        console.error(`[R2 Upload] Attempt ${attempt} failed:`, err)
+      }
+    }
+    throw lastError || new Error(`Failed to upload to Cloudflare R2 after ${maxAttempts} attempts`)
   } else {
     throw new Error('window.api.uploadToR2 is not available')
   }
@@ -570,7 +661,10 @@ export const dbService = {
       if (result.configured === false) {
         // Token not set — silently fall through to Supabase sum
       } else if (result.error) {
-        console.warn('[Storage] R2 REST API returned an error, falling back to Supabase sum:', result.error)
+        console.warn(
+          '[Storage] R2 REST API returned an error, falling back to Supabase sum:',
+          result.error
+        )
       } else {
         console.log(`[Storage] R2 REST API payloadSize: ${result.payloadSize} bytes`)
         return result.payloadSize
@@ -580,9 +674,7 @@ export const dbService = {
     // Fallback 1: sum size_bytes from Supabase photos table
     const supabase = getSupabase()
     if (supabase) {
-      const { data, error } = await supabase
-        .from('photos')
-        .select('size_bytes')
+      const { data, error } = await supabase.from('photos').select('size_bytes')
 
       if (error) {
         console.error('[getTotalStorageUsed] Supabase error:', error)
@@ -951,7 +1043,8 @@ export const dbService = {
       const remaining = pending.filter((p) => p.album_id !== id)
       if (remaining.length !== pending.length) {
         localStorage.setItem('rn_pending_supabase_photos', JSON.stringify(remaining))
-        writeLog('info',
+        writeLog(
+          'info',
           `deleteAlbum: Removed ${pending.length - remaining.length} pending photo(s) from localStorage queue for album ${id}.`
         )
       }
@@ -1060,15 +1153,7 @@ export const dbService = {
     if (onProgress) onProgress(50)
 
     // 2. Upload original image to Cloudflare R2
-    try {
-      r2OriginalUrl = await realR2Upload(originalKey, file)
-    } catch (err) {
-      console.error(
-        '[R2 Upload] Failed to upload original image to R2, falling back to Object URL:',
-        err
-      )
-      r2OriginalUrl = URL.createObjectURL(file)
-    }
+    r2OriginalUrl = await realR2Upload(originalKey, file)
 
     if (onProgress) onProgress(80)
 
@@ -1110,10 +1195,19 @@ export const dbService = {
       const payload = {
         album_id: newImage.album_id,
         file_name: newImage.file_name,
-        public_url: newImage.public_url,
+        public_url:
+          newImage.public_url.startsWith('http://') || newImage.public_url.startsWith('https://')
+            ? newImage.public_url
+            : getExpectedCdnUrl(newImage.storage_key),
         storage_key: newImage.storage_key,
-        thumbnail: newImage.thumbnail,
-        cdn: newImage.public_url,
+        thumbnail:
+          newImage.thumbnail.startsWith('http://') || newImage.thumbnail.startsWith('https://')
+            ? newImage.thumbnail
+            : getExpectedCdnUrl(thumbnailKey),
+        cdn:
+          newImage.public_url.startsWith('http://') || newImage.public_url.startsWith('https://')
+            ? newImage.public_url
+            : getExpectedCdnUrl(newImage.storage_key),
         is_featured: newImage.is_featured,
         created_at: newImage.created_at
       }
@@ -1131,16 +1225,26 @@ export const dbService = {
         supabaseError = err
         if (isNonRetryable(err)) {
           // Non-retryable (e.g. FK violation, album missing) — remove from queue right away
-          writeLog('error',
+          writeLog(
+            'error',
             `NON-RETRYABLE upload error for ${newImage.file_name}: ${err?.message}. Removing from queue.`,
             { album_id: albumId }
           )
-          const current: PendingPhoto[] = JSON.parse(localStorage.getItem('rn_pending_supabase_photos') || '[]')
-          localStorage.setItem('rn_pending_supabase_photos', JSON.stringify(current.filter((p) => p.id !== newImage.id)))
+          const current: PendingPhoto[] = JSON.parse(
+            localStorage.getItem('rn_pending_supabase_photos') || '[]'
+          )
+          localStorage.setItem(
+            'rn_pending_supabase_photos',
+            JSON.stringify(current.filter((p) => p.id !== newImage.id))
+          )
         } else {
-          writeLog('error', `Immediate Supabase insert failed for ${newImage.file_name}. Photo stays in queue for retry.`, {
-            message: err?.message
-          })
+          writeLog(
+            'error',
+            `Immediate Supabase insert failed for ${newImage.file_name}. Photo stays in queue for retry.`,
+            {
+              message: err?.message
+            }
+          )
         }
       }
 
@@ -1155,7 +1259,9 @@ export const dbService = {
         const filtered = updated.filter((p) => p.id !== newImage.id)
         localStorage.setItem('rn_pending_supabase_photos', JSON.stringify(filtered))
 
-        writeLog('info', `Upload fully complete (R2 + Supabase): ${newImage.file_name}`, { id: insertedRow.id })
+        writeLog('info', `Upload fully complete (R2 + Supabase): ${newImage.file_name}`, {
+          id: insertedRow.id
+        })
 
         if (onProgress) onProgress(100)
         return {
@@ -1175,7 +1281,10 @@ export const dbService = {
           throw supabaseError
         }
         // Retryable failure — photo is in localStorage queue for periodic retry
-        throw supabaseError || new Error(`Supabase insert failed for ${newImage.file_name}. Photo queued for retry.`)
+        throw (
+          supabaseError ||
+          new Error(`Supabase insert failed for ${newImage.file_name}. Photo queued for retry.`)
+        )
       }
     } else {
       // In Mock Mode, save to local mock storage
@@ -1455,13 +1564,8 @@ export const dbService = {
 
     if (onProgress) onProgress(10)
 
-    try {
-      if (onProgress) onProgress(30)
-      r2OriginalUrl = await realR2Upload(originalKey, file)
-    } catch (err) {
-      console.error('[R2 Upload] Failed to upload original image, falling back to Object URL:', err)
-      r2OriginalUrl = URL.createObjectURL(file)
-    }
+    if (onProgress) onProgress(30)
+    r2OriginalUrl = await realR2Upload(originalKey, file)
 
     if (onProgress) onProgress(80)
 
@@ -1484,7 +1588,10 @@ export const dbService = {
         .insert([
           {
             file_name: newFeatured.name,
-            public_url: newFeatured.url,
+            public_url:
+              newFeatured.url.startsWith('http://') || newFeatured.url.startsWith('https://')
+                ? newFeatured.url
+                : getExpectedCdnUrl(originalKey),
             storage_key: originalKey
           }
         ])

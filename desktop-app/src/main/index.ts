@@ -210,8 +210,7 @@ app.whenReady().then(() => {
       process.env.CLOUDFLARE_R2_ACCOUNT_ID || process.env.VITE_CLOUDFLARE_R2_ACCOUNT_ID || ''
     const bucketName =
       process.env.CLOUDFLARE_R2_BUCKET_NAME || process.env.VITE_CLOUDFLARE_R2_BUCKET_NAME || ''
-    const apiToken =
-      process.env.CLOUDFLARE_API_TOKEN || process.env.VITE_CLOUDFLARE_API_TOKEN || ''
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN || process.env.VITE_CLOUDFLARE_API_TOKEN || ''
 
     // Return unconfigured sentinel — renderer will fall back to Supabase sum
     if (!accountId || !bucketName || !apiToken) {
@@ -222,7 +221,9 @@ app.whenReady().then(() => {
       ]
         .filter(Boolean)
         .join(', ')
-      console.warn(`[Main Process] r2-get-bucket-usage: missing env vars (${missing}). Add CLOUDFLARE_API_TOKEN to .env with R2:Read permission.`)
+      console.warn(
+        `[Main Process] r2-get-bucket-usage: missing env vars (${missing}). Add CLOUDFLARE_API_TOKEN to .env with R2:Read permission.`
+      )
       return { payloadSize: 0, objectCount: 0, configured: false }
     }
 
@@ -242,10 +243,15 @@ app.whenReady().then(() => {
       if (!response.ok) {
         const errText = await response.text()
         console.error(`[Main Process] R2 usage API HTTP ${response.status}:`, errText)
-        return { payloadSize: 0, objectCount: 0, configured: true, error: `HTTP ${response.status}` }
+        return {
+          payloadSize: 0,
+          objectCount: 0,
+          configured: true,
+          error: `HTTP ${response.status}`
+        }
       }
 
-      const json = await response.json() as {
+      const json = (await response.json()) as {
         success: boolean
         errors: Array<{ message: string }>
         result: {
@@ -257,7 +263,8 @@ app.whenReady().then(() => {
       }
 
       if (!json.success) {
-        const errMsg = json.errors?.map((e) => e.message).join(', ') || 'Unknown Cloudflare API error'
+        const errMsg =
+          json.errors?.map((e) => e.message).join(', ') || 'Unknown Cloudflare API error'
         console.error('[Main Process] Cloudflare API error:', errMsg)
         return { payloadSize: 0, objectCount: 0, configured: true, error: errMsg }
       }
@@ -271,7 +278,6 @@ app.whenReady().then(() => {
       return { payloadSize: 0, objectCount: 0, configured: true, error: err?.message }
     }
   })
-
 
   // IPC handler to write error logs to a persistent log file
   ipcMain.on('write-log', (_event, { level, message, data }) => {
@@ -296,8 +302,7 @@ app.whenReady().then(() => {
   // This is a fallback when the renderer-side anon key insert fails
   ipcMain.handle('supabase-insert-photo', async (_event, photoPayload) => {
     try {
-      const supabaseUrl =
-        process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
+      const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
       const secretKey =
         process.env.SUPABASE_SECRET_KEY ||
         process.env.VITE_SUPABASE_SECRET_KEY ||
@@ -305,9 +310,7 @@ app.whenReady().then(() => {
         ''
 
       if (!supabaseUrl || !secretKey) {
-        throw new Error(
-          'Supabase URL or secret key not configured in main process environment'
-        )
+        throw new Error('Supabase URL or secret key not configured in main process environment')
       }
 
       console.log(
@@ -330,7 +333,9 @@ app.whenReady().then(() => {
         const logPath = join(app.getPath('userData'), 'supabase_upload_errors.log')
         const timestamp = new Date().toISOString()
         const logLine = `[${timestamp}] [ERROR] Main-process Supabase insert failed for ${photoPayload.file_name} | ${JSON.stringify({ message: error.message, code: error.code, details: error.details, hint: error.hint })}\n`
-        try { appendFileSync(logPath, logLine, 'utf-8') } catch {}
+        try {
+          appendFileSync(logPath, logLine, 'utf-8')
+        } catch {}
         console.error('[Main Supabase] Insert error:', error)
         throw new Error(error.message || 'Supabase insert failed')
       }
@@ -360,8 +365,7 @@ app.whenReady().then(() => {
   // Used by ensureAlbumExists() to recover missing parent albums before photo insert.
   ipcMain.handle('supabase-insert-album', async (_event, albumPayload) => {
     try {
-      const supabaseUrl =
-        process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
+      const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
       const secretKey =
         process.env.SUPABASE_SECRET_KEY ||
         process.env.VITE_SUPABASE_SECRET_KEY ||
@@ -372,7 +376,9 @@ app.whenReady().then(() => {
         throw new Error('Supabase URL or secret key not configured in main process environment')
       }
 
-      console.log(`[Main Supabase] Ensuring album exists in Supabase: id=${albumPayload.id}, name="${albumPayload.name}"`)
+      console.log(
+        `[Main Supabase] Ensuring album exists in Supabase: id=${albumPayload.id}, name="${albumPayload.name}"`
+      )
 
       const { createClient } = await import('@supabase/supabase-js')
       const adminClient = createClient(supabaseUrl, secretKey, {
@@ -390,7 +396,9 @@ app.whenReady().then(() => {
         const logPath = join(app.getPath('userData'), 'supabase_upload_errors.log')
         const timestamp = new Date().toISOString()
         const logLine = `[${timestamp}] [ERROR] Album upsert failed for ${albumPayload.id} | ${JSON.stringify({ message: error.message, code: error.code, hint: error.hint })}\n`
-        try { appendFileSync(logPath, logLine, 'utf-8') } catch {}
+        try {
+          appendFileSync(logPath, logLine, 'utf-8')
+        } catch {}
         console.error('[Main Supabase] Album upsert error:', error)
         throw new Error(error.message || 'Album upsert failed')
       }

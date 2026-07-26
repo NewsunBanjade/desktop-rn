@@ -22,7 +22,12 @@ declare global {
         contentType: string
       ) => Promise<string>
       deleteFromR2: (key: string) => Promise<boolean>
-      getR2BucketUsage: () => Promise<{ payloadSize: number; objectCount: number; configured?: boolean; error?: string }>
+      getR2BucketUsage: () => Promise<{
+        payloadSize: number
+        objectCount: number
+        configured?: boolean
+        error?: string
+      }>
       writeLog: (level: 'info' | 'error' | 'warn', message: string, data?: unknown) => void
       writePendingStatus: (pendingList: unknown) => void
       supabaseInsertPhoto: (photoPayload: unknown) => Promise<Record<string, unknown>>

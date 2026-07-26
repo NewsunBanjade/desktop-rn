@@ -47,7 +47,7 @@ export default function AlbumDetail({
 
   useEffect(() => {
     if (album.code) {
-      QRCode.toDataURL(album.code, {
+      QRCode.toDataURL(album.id, {
         width: 300,
         margin: 2,
         color: {
@@ -58,7 +58,7 @@ export default function AlbumDetail({
         .then((url) => setQrCodeUrl(url))
         .catch((err) => console.error('Failed to generate QR code:', err))
     }
-  }, [album.code])
+  }, [album.code, album.id])
 
   const downloadQrCode = (): void => {
     if (!qrCodeUrl) return
@@ -360,33 +360,35 @@ export default function AlbumDetail({
               <AlertTriangle size={22} className="storage-full-banner-icon" />
               <div>
                 <p className="storage-full-banner-title">Storage Limit Reached</p>
-                <p className="storage-full-banner-sub">You&apos;ve used your full 40 GB. Delete existing photos to upload more.</p>
+                <p className="storage-full-banner-sub">
+                  You&apos;ve used your full 40 GB. Delete existing photos to upload more.
+                </p>
               </div>
             </div>
           ) : (
-          <div
-            className={`uploader-box ${isDragOver ? 'uploader-box-dragover' : ''}`}
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={(): void => fileInputRef.current?.click()}
-          >
-            <input
-              type="file"
-              ref={fileInputRef}
-              className="uploader-file-input"
-              multiple
-              accept="image/*"
-              onChange={handleFileSelect}
-            />
-            <div className="uploader-content">
-              <UploadCloud className="uploader-icon" />
-              <p className="uploader-title">Drag &amp; Drop photos here, or click to browse</p>
-              <p className="uploader-subtitle">
-                Supports PNG, JPEG, GIF, WEBP, and TIFF up to 25MB each
-              </p>
+            <div
+              className={`uploader-box ${isDragOver ? 'uploader-box-dragover' : ''}`}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              onClick={(): void => fileInputRef.current?.click()}
+            >
+              <input
+                type="file"
+                ref={fileInputRef}
+                className="uploader-file-input"
+                multiple
+                accept="image/*"
+                onChange={handleFileSelect}
+              />
+              <div className="uploader-content">
+                <UploadCloud className="uploader-icon" />
+                <p className="uploader-title">Drag &amp; Drop photos here, or click to browse</p>
+                <p className="uploader-subtitle">
+                  Supports PNG, JPEG, GIF, WEBP, and TIFF up to 25MB each
+                </p>
+              </div>
             </div>
-          </div>
           )}
 
           {/* Images Grid */}

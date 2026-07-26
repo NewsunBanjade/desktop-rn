@@ -9,7 +9,12 @@ const api = {
   deleteFromR2: (key: string) => ipcRenderer.invoke('delete-from-r2', { key }),
   // Get total R2 bucket storage usage via native Cloudflare REST API
   getR2BucketUsage: () =>
-    ipcRenderer.invoke('r2-get-bucket-usage') as Promise<{ payloadSize: number; objectCount: number; configured?: boolean; error?: string }>,
+    ipcRenderer.invoke('r2-get-bucket-usage') as Promise<{
+      payloadSize: number
+      objectCount: number
+      configured?: boolean
+      error?: string
+    }>,
   // Log errors to a file in userData for persistent debugging
   writeLog: (level: 'info' | 'error' | 'warn', message: string, data?: unknown) =>
     ipcRenderer.send('write-log', { level, message, data }),
