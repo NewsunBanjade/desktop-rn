@@ -130,7 +130,11 @@ function AppInner(): React.JSX.Element {
     }
   }
 
-  const handleUploadFiles = async (files: File[], isFeatured: boolean = false): Promise<void> => {
+  const handleUploadFiles = async (
+    files: File[],
+    onSingleSuccess?: (img: AlbumImage) => void,
+    isFeatured: boolean = false
+  ): Promise<void> => {
     if (isStorageFull) {
       addToast('Storage limit reached (40 GB). Delete some photos to free space.', 'error')
       return
@@ -201,7 +205,11 @@ function AppInner(): React.JSX.Element {
             })
           }
 
-          setRefreshTrigger((prev) => prev + 1)
+          if (onSingleSuccess) {
+            onSingleSuccess(uploadedImg)
+          } else {
+            setRefreshTrigger((prev) => prev + 1)
+          }
           refreshStorage()
           addToast(`"${file.name}" uploaded successfully.`, 'success')
         } catch (err) {
@@ -279,6 +287,17 @@ function AppInner(): React.JSX.Element {
       </>
     )
   }
+
+  // Filter items to prevent performance lag with 1,000+ items
+  const uploadingItems = globalUploads.filter((u) => u.status === 'uploading')
+  const queuedItems = globalUploads.filter((u) => u.status === 'queued')
+  const completedOrErrorItems = globalUploads.filter((u) => u.status === 'completed' || u.status === 'error')
+
+  const visibleUploads = [
+    ...uploadingItems,
+    ...completedOrErrorItems.slice(0, 5)
+  ]
+  const queuedCount = queuedItems.length
 
   return (
     <div className="app-container">
@@ -440,7 +459,7 @@ function AppInner(): React.JSX.Element {
           </div>
 
           <div className="upload-widget-body">
-            {globalUploads.map((upload) => (
+            {visibleUploads.map((upload) => (
               <div key={upload.id} className="upload-widget-item">
                 <div className="upload-widget-item-info">
                   <div className="upload-widget-item-name" title={upload.name}>
@@ -485,6 +504,24 @@ function AppInner(): React.JSX.Element {
                 </div>
               </div>
             ))}
+            {queuedCount > 0 && (
+              <div
+                className="upload-widget-item"
+                style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  padding: '12px',
+                  color: 'var(--text-secondary, #94a3b8)',
+                  fontSize: '13px',
+                  borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                  gap: '8px',
+                  alignItems: 'center'
+                }}
+              >
+                <Clock size={14} style={{ color: 'var(--warning, #f59e0b)' }} />
+                <span>{queuedCount} more {queuedCount === 1 ? 'item' : 'items'} queued...</span>
+              </div>
+            )}
           </div>
         </div>
       )}

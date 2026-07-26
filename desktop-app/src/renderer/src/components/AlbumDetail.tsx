@@ -20,7 +20,11 @@ interface AlbumDetailProps {
   onBack: () => void
   onOpenLightbox: (images: AlbumImage[], index: number) => void
   addToast: (message: string, type: 'success' | 'error') => void
-  onUpload: (files: File[], isFeatured?: boolean) => void
+  onUpload: (
+    files: File[],
+    onSingleSuccess?: (img: AlbumImage) => void,
+    isFeatured?: boolean
+  ) => void
   refreshTrigger: number
   isStorageFull: boolean
 }
@@ -164,6 +168,14 @@ export default function AlbumDetail({
     }
   }
 
+  const handleSingleUploadSuccess = useCallback((newImg: AlbumImage) => {
+    setImages((prev) => {
+      if (prev.some((img) => img.id === newImg.id)) return prev
+      return [newImg, ...prev]
+    })
+    setOffset((prev) => prev + 1)
+  }, [])
+
   const processFiles = (fileList: FileList): void => {
     if (isStorageFull) {
       addToast('Storage limit reached (40 GB). Delete some photos to free space.', 'error')
@@ -182,7 +194,7 @@ export default function AlbumDetail({
       addToast('Skipped non-image files.', 'error')
     }
 
-    onUpload(imageFiles)
+    onUpload(imageFiles, handleSingleUploadSuccess)
   }
 
   const handleDeleteAlbum = async (): Promise<void> => {

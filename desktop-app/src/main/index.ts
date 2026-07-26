@@ -87,7 +87,47 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // IPC handler to return env variables safely to renderer process
+  // Cached S3 Client credentials and instance
+  let cachedS3Client: any = null
+  let cachedAccessKeyId = ''
+  let cachedSecretAccessKey = ''
+  let cachedAccountId = ''
+
+  async function getS3Client(): Promise<any> {
+    const accountId = process.env.CLOUDFLARE_R2_ACCOUNT_ID || ''
+    const accessKeyId = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || ''
+    const secretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY || ''
+
+    if (!accountId || !accessKeyId || !secretAccessKey) {
+      throw new Error('Cloudflare R2 credentials are not configured in main process environment')
+    }
+
+    if (
+      cachedS3Client &&
+      cachedAccessKeyId === accessKeyId &&
+      cachedSecretAccessKey === secretAccessKey &&
+      cachedAccountId === accountId
+    ) {
+      return cachedS3Client
+    }
+
+    const { S3Client } = await import('@aws-sdk/client-s3')
+    cachedS3Client = new S3Client({
+      region: 'auto',
+      endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId,
+        secretAccessKey
+      }
+    })
+    cachedAccessKeyId = accessKeyId
+    cachedSecretAccessKey = secretAccessKey
+    cachedAccountId = accountId
+
+    return cachedS3Client
+  }
+
+  // IPC handler to return public env variables safely to renderer process (omitting secrets)
   ipcMain.on('get-env', (event) => {
     event.returnValue = {
       SUPABASE_URL: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '',
@@ -97,58 +137,31 @@ app.whenReady().then(() => {
         process.env.SUPABASE_ANON_KEY ||
         process.env.VITE_SUPABASE_ANON_KEY ||
         '',
-      SUPABASE_SECRET_KEY:
-        process.env.SUPABASE_SECRET_KEY || process.env.VITE_SUPABASE_SECRET_KEY || '',
-      CLOUDFLARE_R2_BUCKET_NAME:
-        process.env.CLOUDFLARE_R2_BUCKET_NAME || process.env.VITE_CLOUDFLARE_R2_BUCKET_NAME || '',
-      CLOUDFLARE_R2_ACCOUNT_ID:
-        process.env.CLOUDFLARE_R2_ACCOUNT_ID || process.env.VITE_CLOUDFLARE_R2_ACCOUNT_ID || '',
-      CLOUDFLARE_R2_ACCESS_KEY_ID:
-        process.env.CLOUDFLARE_R2_ACCESS_KEY_ID ||
-        process.env.VITE_CLOUDFLARE_R2_ACCESS_KEY_ID ||
-        '',
-      CLOUDFLARE_R2_SECRET_ACCESS_KEY:
-        process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY ||
-        process.env.VITE_CLOUDFLARE_R2_SECRET_ACCESS_KEY ||
-        '',
       CLOUDFLARE_R2_PUBLIC_URL:
-        process.env.CLOUDFLARE_R2_PUBLIC_URL || process.env.VITE_CLOUDFLARE_R2_PUBLIC_URL || '',
-      CLOUDFLARE_R2_S3_ENDPOINT:
-        process.env.CLOUDFLARE_R2_S3_ENDPOINT || process.env.VITE_CLOUDFLARE_R2_S3_ENDPOINT || '',
-      CLOUDFLARE_API_TOKEN:
-        process.env.CLOUDFLARE_API_TOKEN || process.env.VITE_CLOUDFLARE_API_TOKEN || ''
+        process.env.CLOUDFLARE_R2_PUBLIC_URL || process.env.VITE_CLOUDFLARE_R2_PUBLIC_URL || ''
     }
   })
 
-  // IPC handler to upload files to Cloudflare R2 bucket
-  ipcMain.handle('upload-to-r2', async (_event, { fileName, fileBuffer, contentType }) => {
+  // IPC handler to upload files to Cloudflare R2 bucket (accepts fileBuffer or filePath)
+  ipcMain.handle('upload-to-r2', async (_event, { fileName, fileBuffer, filePath, contentType }) => {
     try {
       const bucketName = process.env.CLOUDFLARE_R2_BUCKET_NAME || 'imagecdn'
-      const accountId = process.env.CLOUDFLARE_R2_ACCOUNT_ID || ''
-      const accessKeyId = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || ''
-      const secretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY || ''
+      const s3Client = await getS3Client()
 
-      if (!accountId || !accessKeyId || !secretAccessKey) {
-        throw new Error('Cloudflare R2 credentials are not configured in main process environment')
+      let body: Buffer | import('fs').ReadStream
+      if (filePath) {
+        const { createReadStream } = await import('fs')
+        body = createReadStream(filePath)
+      } else {
+        body = Buffer.from(fileBuffer)
       }
 
-      const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3')
-
-      const s3Client = new S3Client({
-        region: 'auto',
-        endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-        credentials: {
-          accessKeyId,
-          secretAccessKey
-        }
-      })
-
-      const buffer = Buffer.from(fileBuffer)
+      const { PutObjectCommand } = await import('@aws-sdk/client-s3')
       await s3Client.send(
         new PutObjectCommand({
           Bucket: bucketName,
           Key: fileName,
-          Body: buffer,
+          Body: body,
           ContentType: contentType
         })
       )
@@ -167,25 +180,9 @@ app.whenReady().then(() => {
   ipcMain.handle('delete-from-r2', async (_event, { key }) => {
     try {
       const bucketName = process.env.CLOUDFLARE_R2_BUCKET_NAME || 'imagecdn'
-      const accountId = process.env.CLOUDFLARE_R2_ACCOUNT_ID || ''
-      const accessKeyId = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || ''
-      const secretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY || ''
+      const s3Client = await getS3Client()
 
-      if (!accountId || !accessKeyId || !secretAccessKey) {
-        throw new Error('Cloudflare R2 credentials are not configured in main process environment')
-      }
-
-      const { S3Client, DeleteObjectCommand } = await import('@aws-sdk/client-s3')
-
-      const s3Client = new S3Client({
-        region: 'auto',
-        endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-        credentials: {
-          accessKeyId,
-          secretAccessKey
-        }
-      })
-
+      const { DeleteObjectCommand } = await import('@aws-sdk/client-s3')
       await s3Client.send(
         new DeleteObjectCommand({
           Bucket: bucketName,
@@ -198,6 +195,27 @@ app.whenReady().then(() => {
     } catch (error: any) {
       console.error('[Main Process] R2 Delete Error:', error)
       throw new Error(error.message || 'Failed to delete from Cloudflare R2')
+    }
+  })
+
+  // IPC handler to generate a thumbnail buffer natively from a file path or buffer using Electron's nativeImage
+  ipcMain.handle('generate-thumbnail', async (_event, { filePath, fileBuffer }) => {
+    try {
+      const { nativeImage } = require('electron')
+      const img = filePath
+        ? nativeImage.createFromPath(filePath)
+        : nativeImage.createFromBuffer(Buffer.from(fileBuffer))
+
+      if (img.isEmpty()) {
+        throw new Error('Failed to load image for thumbnail generation')
+      }
+
+      // Resize the image natively to 200x200
+      const resized = img.resize({ width: 200, height: 200, quality: 'better' })
+      return resized.toJPEG(85)
+    } catch (error: any) {
+      console.error('[Main Process] Thumbnail Generation Error:', error)
+      throw new Error(error.message || 'Failed to generate thumbnail')
     }
   })
 

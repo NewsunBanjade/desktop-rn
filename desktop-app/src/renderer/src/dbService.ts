@@ -345,7 +345,7 @@ async function ensureAlbumExists(
     })
     throw new NonRetryableError(
       `Album ${albumId} does not exist in Supabase and could not be re-created. ` +
-        `Photo cannot be inserted (FK constraint). Removing from queue.`
+      `Photo cannot be inserted (FK constraint). Removing from queue.`
     )
   }
 
@@ -416,7 +416,7 @@ async function insertPhotoToSupabase(
         if (errMsg.includes('foreign key constraint') || errMsg.includes('violates foreign key')) {
           throw new NonRetryableError(
             `FK constraint violation for ${payload.file_name} (album_id: ${payload.album_id}). ` +
-              `Parent album missing in Supabase.`
+            `Parent album missing in Supabase.`
           )
         }
         writeLog('error', `Main-process secret-key insert also failed for ${payload.file_name}`, {
@@ -496,7 +496,7 @@ export async function syncPendingPhotos(): Promise<void> {
         storage_key: item.storage_key,
         thumbnail:
           item.thumbnail &&
-          (item.thumbnail.startsWith('http://') || item.thumbnail.startsWith('https://'))
+            (item.thumbnail.startsWith('http://') || item.thumbnail.startsWith('https://'))
             ? item.thumbnail
             : getExpectedCdnUrl(getThumbnailKeyFromStorageKey(item.storage_key)),
         cdn:
@@ -585,7 +585,7 @@ export function stopPeriodicSync(): void {
 
 export async function realR2Upload(
   key: string,
-  fileBlob: Blob,
+  fileBlob: Blob | File,
   onProgress?: (progress: number) => void
 ): Promise<string> {
   console.log(`[R2 Upload] Starting real upload to Cloudflare R2 bucket`)
@@ -595,7 +595,13 @@ export async function realR2Upload(
   if (onProgress) onProgress(10)
 
   if (window.api && typeof window.api.uploadToR2 === 'function') {
-    const arrayBuffer = await fileBlob.arrayBuffer()
+    const filePath = (fileBlob as any).path || ''
+    let arrayBuffer: ArrayBuffer | null = null
+    if (!filePath) {
+      arrayBuffer = await fileBlob.arrayBuffer()
+    } else {
+      console.log(`[R2 Upload] Streaming from local file path: ${filePath}`)
+    }
     const maxAttempts = 3
     let lastError: any = null
 
@@ -609,7 +615,12 @@ export async function realR2Upload(
           await new Promise((resolve) => setTimeout(resolve, 1500))
         }
         if (onProgress) onProgress(40 + (attempt - 1) * 10)
-        const fileUrl = await window.api.uploadToR2(key, arrayBuffer, fileBlob.type || 'image/jpeg')
+        const fileUrl = await window.api.uploadToR2(
+          key,
+          arrayBuffer,
+          fileBlob.type || 'image/jpeg',
+          filePath
+        )
         if (onProgress) onProgress(100)
         console.log(`[R2 Upload] Completed! Public URL: ${fileUrl}`)
         return fileUrl
@@ -866,6 +877,7 @@ export const dbService = {
       thumbnail: string
       cdn: string
       is_featured: boolean
+
       created_at: string
     }> = []
     const getDbId = (mockId: string): string | null => {
@@ -1131,16 +1143,27 @@ export const dbService = {
 
     if (file.type.startsWith('image/')) {
       try {
-        console.log(`[Image Resizer] Resizing "${file.name}" to 200x200 thumbnail...`)
-        const config = {
-          quality: 0.85,
-          maxWidth: 200,
-          maxHeight: 200,
-          autoRotate: true,
-          mimeType: 'image/jpeg'
+        const filePath = (file as any).path || ''
+        console.log(`[Image Resizer] Generating 200x200 thumbnail for "${file.name}"...`)
+
+        if (window.api && typeof window.api.generateThumbnail === 'function') {
+          console.log(`[Image Resizer] Resizing natively using Electron nativeImage...`)
+          const fileBuffer = !filePath ? await file.arrayBuffer() : null
+          const resizedBuffer = await window.api.generateThumbnail({ filePath, fileBuffer })
+          thumbnailBlob = new Blob([resizedBuffer as any], { type: 'image/jpeg' })
+        } else {
+          console.log(`[Image Resizer] Resizing using browser-image-resizer fallback...`)
+          const config = {
+            quality: 0.85,
+            maxWidth: 200,
+            maxHeight: 200,
+            autoRotate: true,
+            mimeType: 'image/jpeg'
+          }
+          thumbnailBlob = await readAndCompressImage(file, config)
         }
-        thumbnailBlob = await readAndCompressImage(file, config)
-        console.log(`[Image Resizer] Success! Resized size: ${thumbnailBlob.size} bytes.`)
+
+        console.log(`[Image Resizer] Success! Thumbnail size: ${thumbnailBlob.size} bytes.`)
 
         if (onProgress) onProgress(30)
         // Upload thumbnail to Cloudflare R2

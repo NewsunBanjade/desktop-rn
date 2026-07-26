@@ -18,10 +18,15 @@ declare global {
       }
       uploadToR2: (
         fileName: string,
-        fileBuffer: ArrayBuffer,
-        contentType: string
+        fileBuffer: ArrayBuffer | null,
+        contentType: string,
+        filePath?: string
       ) => Promise<string>
       deleteFromR2: (key: string) => Promise<boolean>
+      generateThumbnail: (args: {
+        filePath: string
+        fileBuffer: ArrayBuffer | null
+      }) => Promise<Uint8Array>
       getR2BucketUsage: () => Promise<{
         payloadSize: number
         objectCount: number
