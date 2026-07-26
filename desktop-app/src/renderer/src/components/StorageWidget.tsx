@@ -56,7 +56,10 @@ export default function StorageWidget(): React.JSX.Element {
       </div>
 
       <div className="storage-meta">
-        <span className="storage-used" style={{ color: isStorageFull ? 'var(--error)' : undefined }}>
+        <span
+          className="storage-used"
+          style={{ color: isStorageFull ? 'var(--error)' : undefined }}
+        >
           {isLoading ? '—' : formatBytes(usedBytes)}
         </span>
         <span className="storage-limit">{formatBytes(limitBytes)}</span>

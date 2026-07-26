@@ -18,11 +18,21 @@ declare global {
       }
       uploadToR2: (
         fileName: string,
-        fileBuffer: ArrayBuffer,
-        contentType: string
+        fileBuffer: ArrayBuffer | null,
+        contentType: string,
+        filePath?: string
       ) => Promise<string>
       deleteFromR2: (key: string) => Promise<boolean>
-      getR2BucketUsage: () => Promise<{ payloadSize: number; objectCount: number; configured?: boolean; error?: string }>
+      generateThumbnail: (args: {
+        filePath: string
+        fileBuffer: ArrayBuffer | null
+      }) => Promise<Uint8Array>
+      getR2BucketUsage: () => Promise<{
+        payloadSize: number
+        objectCount: number
+        configured?: boolean
+        error?: string
+      }>
       writeLog: (level: 'info' | 'error' | 'warn', message: string, data?: unknown) => void
       writePendingStatus: (pendingList: unknown) => void
       supabaseInsertPhoto: (photoPayload: unknown) => Promise<Record<string, unknown>>

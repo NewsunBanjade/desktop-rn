@@ -1,12 +1,18 @@
 import React, { useState, useEffect } from 'react'
 import { LogOut, CheckCircle2, AlertCircle, X, ChevronDown, ChevronUp, Clock } from 'lucide-react'
-import { dbService, Album, AlbumImage, UserSession, startPeriodicSync, stopPeriodicSync } from './dbService'
+import {
+  dbService,
+  Album,
+  AlbumImage,
+  UserSession,
+  startPeriodicSync,
+  stopPeriodicSync
+} from './dbService'
 import Login from './components/Login'
 import Dashboard from './components/Dashboard'
 import AlbumDetail from './components/AlbumDetail'
 import CreateAlbumModal from './components/CreateAlbumModal'
 import Lightbox from './components/Lightbox'
-import Versions from './components/Versions'
 import StorageWidget from './components/StorageWidget'
 import { StorageProvider, useStorage } from './StorageContext'
 
@@ -123,7 +129,11 @@ function AppInner(): React.JSX.Element {
     }
   }
 
-  const handleUploadFiles = (files: File[], isFeatured: boolean = false): void => {
+  const handleUploadFiles = async (
+    files: File[],
+    onSingleSuccess?: (img: AlbumImage) => void,
+    isFeatured: boolean = false
+  ): Promise<void> => {
     if (isStorageFull) {
       addToast('Storage limit reached (40 GB). Delete some photos to free space.', 'error')
       return
@@ -134,89 +144,121 @@ function AppInner(): React.JSX.Element {
 
     const albumId = currentAlbum.id
 
-    files.forEach(async (file) => {
+    // Limit concurrency to 3 simultaneous uploads
+    const limit = 3
+    let index = 0
+
+    // Map all files to UI items initially as "queued"
+    const fileItems = files.map((file) => {
       const uploadId = `upload-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-
-      const newUpload: GlobalUploadItem = {
-        id: uploadId,
-        name: file.name,
-        progress: 0,
-        size: file.size,
-        status: 'uploading'
-      }
-
-      setGlobalUploads((prev) => [newUpload, ...prev])
-
-      try {
-        const uploadedImg = await dbService.uploadImage(
-          albumId,
-          file,
-          (progress) => {
-            setGlobalUploads((prev) =>
-              prev.map((item) => (item.id === uploadId ? { ...item, progress } : item))
-            )
-          },
-          isFeatured
-        )
-
-        // Both R2 and Supabase succeeded
-        setGlobalUploads((prev) =>
-          prev.map((item) =>
-            item.id === uploadId ? { ...item, status: 'completed', progress: 100 } : item
-          )
-        )
-
-        if (isFeatured && currentAlbum) {
-          setCurrentAlbum((prev) => {
-            if (!prev) return null
-            return { ...prev, cover_image_url: uploadedImg.thumbnail || uploadedImg.url }
-          })
-        }
-
-        setRefreshTrigger((prev) => prev + 1)
-        refreshStorage()
-        addToast(`"${file.name}" uploaded successfully.`, 'success')
-      } catch (err) {
-        const error = err as Error
-        console.error('[Upload] Error:', error)
-
-        // Distinguish: R2 failed vs Supabase failed (queued for retry)
-        const isQueuedForRetry =
-          error.message?.includes('queued for retry') ||
-          error.message?.includes('Supabase insert failed')
-
-        if (isQueuedForRetry) {
-          // R2 succeeded, Supabase is pending — show as queued
-          setGlobalUploads((prev) =>
-            prev.map((item) =>
-              item.id === uploadId
-                ? {
-                    ...item,
-                    status: 'queued',
-                    progress: 100,
-                    error: 'Saved to R2. Supabase sync pending (auto-retry every 30s).'
-                  }
-                : item
-            )
-          )
-          setRefreshTrigger((prev) => prev + 1)
-          addToast(
-            `"${file.name}" uploaded to R2. Supabase sync will retry automatically.`,
-            'error'
-          )
-        } else {
-          // Total failure
-          setGlobalUploads((prev) =>
-            prev.map((item) =>
-              item.id === uploadId
-                ? { ...item, status: 'error', error: error.message || 'Upload failed' }
-                : item
-            )
-          )
-          addToast(`Upload failed for ${file.name}`, 'error')
+      return {
+        uploadId,
+        file,
+        newUpload: {
+          id: uploadId,
+          name: file.name,
+          progress: 0,
+          size: file.size,
+          status: 'queued' as const
         }
       }
     })
+
+    // Batch update state with all queued files in a single React render
+    setGlobalUploads((prev) => [...fileItems.map((x) => x.newUpload), ...prev])
+
+    const uploadWorker = async (): Promise<void> => {
+      while (index < fileItems.length) {
+        const currentIdx = index++
+        const item = fileItems[currentIdx]
+        if (!item) break
+
+        const { uploadId, file } = item
+
+        // Set status to "uploading"
+        setGlobalUploads((prev) =>
+          prev.map((u) => (u.id === uploadId ? { ...u, status: 'uploading' } : u))
+        )
+
+        try {
+          const uploadedImg = await dbService.uploadImage(
+            albumId,
+            file,
+            (progress) => {
+              setGlobalUploads((prev) =>
+                prev.map((u) => (u.id === uploadId ? { ...u, progress } : u))
+              )
+            },
+            isFeatured
+          )
+
+          // Both R2 and Supabase succeeded
+          setGlobalUploads((prev) =>
+            prev.map((u) => (u.id === uploadId ? { ...u, status: 'completed', progress: 100 } : u))
+          )
+
+          if (isFeatured && currentAlbum) {
+            setCurrentAlbum((prev) => {
+              if (!prev) return null
+              return { ...prev, cover_image_url: uploadedImg.thumbnail || uploadedImg.url }
+            })
+          }
+
+          if (onSingleSuccess) {
+            onSingleSuccess(uploadedImg)
+          } else {
+            setRefreshTrigger((prev) => prev + 1)
+          }
+          refreshStorage()
+          addToast(`"${file.name}" uploaded successfully.`, 'success')
+        } catch (err) {
+          const error = err as Error
+          console.error('[Upload] Error:', error)
+
+          // Distinguish: R2 succeeded but Supabase failed (queued for retry) vs total failure
+          const isQueuedForRetry =
+            error.message?.includes('queued for retry') ||
+            error.message?.includes('Supabase insert failed')
+
+          if (isQueuedForRetry) {
+            setGlobalUploads((prev) =>
+              prev.map((u) =>
+                u.id === uploadId
+                  ? {
+                      ...u,
+                      status: 'queued',
+                      progress: 100,
+                      error: 'Saved to R2. Supabase sync pending (auto-retry every 30s).'
+                    }
+                  : u
+              )
+            )
+            setRefreshTrigger((prev) => prev + 1)
+            addToast(
+              `"${file.name}" uploaded to R2. Supabase sync will retry automatically.`,
+              'error'
+            )
+          } else {
+            // Total failure (R2 upload failed)
+            setGlobalUploads((prev) =>
+              prev.map((u) =>
+                u.id === uploadId
+                  ? { ...u, status: 'error', error: error.message || 'Upload failed' }
+                  : u
+              )
+            )
+            addToast(`Upload failed for ${file.name}`, 'error')
+          }
+        }
+      }
+    }
+
+    // Launch workers in parallel to process the queue
+    const workers: Promise<void>[] = []
+    for (let i = 0; i < Math.min(limit, fileItems.length); i++) {
+      workers.push(uploadWorker())
+    }
+    await Promise.all(workers)
   }
 
   // Render Login page if not authenticated
@@ -244,6 +286,17 @@ function AppInner(): React.JSX.Element {
       </>
     )
   }
+
+  // Filter items to prevent performance lag with 1,000+ items
+  const uploadingItems = globalUploads.filter((u) => u.status === 'uploading')
+  const queuedItems = globalUploads.filter((u) => u.status === 'queued')
+  const completedOrErrorItems = globalUploads.filter((u) => u.status === 'completed' || u.status === 'error')
+
+  const visibleUploads = [
+    ...uploadingItems,
+    ...completedOrErrorItems.slice(0, 5)
+  ]
+  const queuedCount = queuedItems.length
 
   return (
     <div className="app-container">
@@ -297,7 +350,10 @@ function AppInner(): React.JSX.Element {
             onSelectAlbum={(album): void => setCurrentAlbum(album)}
             onOpenCreateModal={(): void => {
               if (isStorageFull) {
-                addToast('Storage limit reached (40 GB). Delete some photos to free space.', 'error')
+                addToast(
+                  'Storage limit reached (40 GB). Delete some photos to free space.',
+                  'error'
+                )
                 return
               }
               setIsCreateAlbumOpen(true)
@@ -307,9 +363,6 @@ function AppInner(): React.JSX.Element {
           />
         )}
       </main>
-
-      {/* Footer system details */}
-      <Versions />
 
       {/* Modals & Dialogs */}
       {isCreateAlbumOpen && (
@@ -366,7 +419,10 @@ function AppInner(): React.JSX.Element {
                 </>
               ) : globalUploads.some((u) => u.status === 'queued') ? (
                 <>
-                  <Clock size={16} style={{ color: 'var(--warning, #f59e0b)', marginRight: '6px' }} />
+                  <Clock
+                    size={16}
+                    style={{ color: 'var(--warning, #f59e0b)', marginRight: '6px' }}
+                  />
                   {globalUploads.filter((u) => u.status === 'completed').length} complete,{' '}
                   {globalUploads.filter((u) => u.status === 'queued').length} syncing...
                 </>
@@ -399,7 +455,7 @@ function AppInner(): React.JSX.Element {
           </div>
 
           <div className="upload-widget-body">
-            {globalUploads.map((upload) => (
+            {visibleUploads.map((upload) => (
               <div key={upload.id} className="upload-widget-item">
                 <div className="upload-widget-item-info">
                   <div className="upload-widget-item-name" title={upload.name}>
@@ -444,6 +500,24 @@ function AppInner(): React.JSX.Element {
                 </div>
               </div>
             ))}
+            {queuedCount > 0 && (
+              <div
+                className="upload-widget-item"
+                style={{
+                  display: 'flex',
+                  justifyContent: 'center',
+                  padding: '12px',
+                  color: 'var(--text-secondary, #94a3b8)',
+                  fontSize: '13px',
+                  borderTop: '1px solid rgba(255, 255, 255, 0.08)',
+                  gap: '8px',
+                  alignItems: 'center'
+                }}
+              >
+                <Clock size={14} style={{ color: 'var(--warning, #f59e0b)' }} />
+                <span>{queuedCount} more {queuedCount === 1 ? 'item' : 'items'} queued...</span>
+              </div>
+            )}
           </div>
         </div>
       )}

@@ -1,5 +1,5 @@
-appId: com.electron.app
-productName: desktop-app
+appId: com.newsun.rnuploader
+productName: RN Uploader
 directories:
   buildResources: build
 files:
@@ -12,7 +12,9 @@ files:
 asarUnpack:
   - resources/**
 win:
-  executableName: desktop-app
+  target:
+    - nsis
+  executableName: RN Uploader
 nsis:
   artifactName: ${name}-${version}-setup.${ext}
   shortcutName: ${productName}

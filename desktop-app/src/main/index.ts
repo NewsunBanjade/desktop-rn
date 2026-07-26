@@ -87,7 +87,47 @@ app.whenReady().then(() => {
     optimizer.watchWindowShortcuts(window)
   })
 
-  // IPC handler to return env variables safely to renderer process
+  // Cached S3 Client credentials and instance
+  let cachedS3Client: any = null
+  let cachedAccessKeyId = ''
+  let cachedSecretAccessKey = ''
+  let cachedAccountId = ''
+
+  async function getS3Client(): Promise<any> {
+    const accountId = process.env.CLOUDFLARE_R2_ACCOUNT_ID || ''
+    const accessKeyId = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || ''
+    const secretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY || ''
+
+    if (!accountId || !accessKeyId || !secretAccessKey) {
+      throw new Error('Cloudflare R2 credentials are not configured in main process environment')
+    }
+
+    if (
+      cachedS3Client &&
+      cachedAccessKeyId === accessKeyId &&
+      cachedSecretAccessKey === secretAccessKey &&
+      cachedAccountId === accountId
+    ) {
+      return cachedS3Client
+    }
+
+    const { S3Client } = await import('@aws-sdk/client-s3')
+    cachedS3Client = new S3Client({
+      region: 'auto',
+      endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+      credentials: {
+        accessKeyId,
+        secretAccessKey
+      }
+    })
+    cachedAccessKeyId = accessKeyId
+    cachedSecretAccessKey = secretAccessKey
+    cachedAccountId = accountId
+
+    return cachedS3Client
+  }
+
+  // IPC handler to return public env variables safely to renderer process (omitting secrets)
   ipcMain.on('get-env', (event) => {
     event.returnValue = {
       SUPABASE_URL: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '',
@@ -97,58 +137,31 @@ app.whenReady().then(() => {
         process.env.SUPABASE_ANON_KEY ||
         process.env.VITE_SUPABASE_ANON_KEY ||
         '',
-      SUPABASE_SECRET_KEY:
-        process.env.SUPABASE_SECRET_KEY || process.env.VITE_SUPABASE_SECRET_KEY || '',
-      CLOUDFLARE_R2_BUCKET_NAME:
-        process.env.CLOUDFLARE_R2_BUCKET_NAME || process.env.VITE_CLOUDFLARE_R2_BUCKET_NAME || '',
-      CLOUDFLARE_R2_ACCOUNT_ID:
-        process.env.CLOUDFLARE_R2_ACCOUNT_ID || process.env.VITE_CLOUDFLARE_R2_ACCOUNT_ID || '',
-      CLOUDFLARE_R2_ACCESS_KEY_ID:
-        process.env.CLOUDFLARE_R2_ACCESS_KEY_ID ||
-        process.env.VITE_CLOUDFLARE_R2_ACCESS_KEY_ID ||
-        '',
-      CLOUDFLARE_R2_SECRET_ACCESS_KEY:
-        process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY ||
-        process.env.VITE_CLOUDFLARE_R2_SECRET_ACCESS_KEY ||
-        '',
       CLOUDFLARE_R2_PUBLIC_URL:
-        process.env.CLOUDFLARE_R2_PUBLIC_URL || process.env.VITE_CLOUDFLARE_R2_PUBLIC_URL || '',
-      CLOUDFLARE_R2_S3_ENDPOINT:
-        process.env.CLOUDFLARE_R2_S3_ENDPOINT || process.env.VITE_CLOUDFLARE_R2_S3_ENDPOINT || '',
-      CLOUDFLARE_API_TOKEN:
-        process.env.CLOUDFLARE_API_TOKEN || process.env.VITE_CLOUDFLARE_API_TOKEN || ''
+        process.env.CLOUDFLARE_R2_PUBLIC_URL || process.env.VITE_CLOUDFLARE_R2_PUBLIC_URL || ''
     }
   })
 
-  // IPC handler to upload files to Cloudflare R2 bucket
-  ipcMain.handle('upload-to-r2', async (_event, { fileName, fileBuffer, contentType }) => {
+  // IPC handler to upload files to Cloudflare R2 bucket (accepts fileBuffer or filePath)
+  ipcMain.handle('upload-to-r2', async (_event, { fileName, fileBuffer, filePath, contentType }) => {
     try {
       const bucketName = process.env.CLOUDFLARE_R2_BUCKET_NAME || 'imagecdn'
-      const accountId = process.env.CLOUDFLARE_R2_ACCOUNT_ID || ''
-      const accessKeyId = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || ''
-      const secretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY || ''
+      const s3Client = await getS3Client()
 
-      if (!accountId || !accessKeyId || !secretAccessKey) {
-        throw new Error('Cloudflare R2 credentials are not configured in main process environment')
+      let body: Buffer | import('fs').ReadStream
+      if (filePath) {
+        const { createReadStream } = await import('fs')
+        body = createReadStream(filePath)
+      } else {
+        body = Buffer.from(fileBuffer)
       }
 
-      const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3')
-
-      const s3Client = new S3Client({
-        region: 'auto',
-        endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-        credentials: {
-          accessKeyId,
-          secretAccessKey
-        }
-      })
-
-      const buffer = Buffer.from(fileBuffer)
+      const { PutObjectCommand } = await import('@aws-sdk/client-s3')
       await s3Client.send(
         new PutObjectCommand({
           Bucket: bucketName,
           Key: fileName,
-          Body: buffer,
+          Body: body,
           ContentType: contentType
         })
       )
@@ -167,25 +180,9 @@ app.whenReady().then(() => {
   ipcMain.handle('delete-from-r2', async (_event, { key }) => {
     try {
       const bucketName = process.env.CLOUDFLARE_R2_BUCKET_NAME || 'imagecdn'
-      const accountId = process.env.CLOUDFLARE_R2_ACCOUNT_ID || ''
-      const accessKeyId = process.env.CLOUDFLARE_R2_ACCESS_KEY_ID || ''
-      const secretAccessKey = process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY || ''
+      const s3Client = await getS3Client()
 
-      if (!accountId || !accessKeyId || !secretAccessKey) {
-        throw new Error('Cloudflare R2 credentials are not configured in main process environment')
-      }
-
-      const { S3Client, DeleteObjectCommand } = await import('@aws-sdk/client-s3')
-
-      const s3Client = new S3Client({
-        region: 'auto',
-        endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
-        credentials: {
-          accessKeyId,
-          secretAccessKey
-        }
-      })
-
+      const { DeleteObjectCommand } = await import('@aws-sdk/client-s3')
       await s3Client.send(
         new DeleteObjectCommand({
           Bucket: bucketName,
@@ -201,6 +198,27 @@ app.whenReady().then(() => {
     }
   })
 
+  // IPC handler to generate a thumbnail buffer natively from a file path or buffer using Electron's nativeImage
+  ipcMain.handle('generate-thumbnail', async (_event, { filePath, fileBuffer }) => {
+    try {
+      const { nativeImage } = require('electron')
+      const img = filePath
+        ? nativeImage.createFromPath(filePath)
+        : nativeImage.createFromBuffer(Buffer.from(fileBuffer))
+
+      if (img.isEmpty()) {
+        throw new Error('Failed to load image for thumbnail generation')
+      }
+
+      // Resize the image natively to 200x200
+      const resized = img.resize({ width: 200, height: 200, quality: 'better' })
+      return resized.toJPEG(85)
+    } catch (error: any) {
+      console.error('[Main Process] Thumbnail Generation Error:', error)
+      throw new Error(error.message || 'Failed to generate thumbnail')
+    }
+  })
+
   // IPC handler to fetch R2 bucket storage usage via the native Cloudflare REST API
   // GET /accounts/{account_id}/r2/buckets/{bucket_name}/usage
   // NEVER throws — returns { payloadSize, objectCount, configured } so the renderer
@@ -210,8 +228,7 @@ app.whenReady().then(() => {
       process.env.CLOUDFLARE_R2_ACCOUNT_ID || process.env.VITE_CLOUDFLARE_R2_ACCOUNT_ID || ''
     const bucketName =
       process.env.CLOUDFLARE_R2_BUCKET_NAME || process.env.VITE_CLOUDFLARE_R2_BUCKET_NAME || ''
-    const apiToken =
-      process.env.CLOUDFLARE_API_TOKEN || process.env.VITE_CLOUDFLARE_API_TOKEN || ''
+    const apiToken = process.env.CLOUDFLARE_API_TOKEN || process.env.VITE_CLOUDFLARE_API_TOKEN || ''
 
     // Return unconfigured sentinel — renderer will fall back to Supabase sum
     if (!accountId || !bucketName || !apiToken) {
@@ -222,7 +239,9 @@ app.whenReady().then(() => {
       ]
         .filter(Boolean)
         .join(', ')
-      console.warn(`[Main Process] r2-get-bucket-usage: missing env vars (${missing}). Add CLOUDFLARE_API_TOKEN to .env with R2:Read permission.`)
+      console.warn(
+        `[Main Process] r2-get-bucket-usage: missing env vars (${missing}). Add CLOUDFLARE_API_TOKEN to .env with R2:Read permission.`
+      )
       return { payloadSize: 0, objectCount: 0, configured: false }
     }
 
@@ -242,10 +261,15 @@ app.whenReady().then(() => {
       if (!response.ok) {
         const errText = await response.text()
         console.error(`[Main Process] R2 usage API HTTP ${response.status}:`, errText)
-        return { payloadSize: 0, objectCount: 0, configured: true, error: `HTTP ${response.status}` }
+        return {
+          payloadSize: 0,
+          objectCount: 0,
+          configured: true,
+          error: `HTTP ${response.status}`
+        }
       }
 
-      const json = await response.json() as {
+      const json = (await response.json()) as {
         success: boolean
         errors: Array<{ message: string }>
         result: {
@@ -257,7 +281,8 @@ app.whenReady().then(() => {
       }
 
       if (!json.success) {
-        const errMsg = json.errors?.map((e) => e.message).join(', ') || 'Unknown Cloudflare API error'
+        const errMsg =
+          json.errors?.map((e) => e.message).join(', ') || 'Unknown Cloudflare API error'
         console.error('[Main Process] Cloudflare API error:', errMsg)
         return { payloadSize: 0, objectCount: 0, configured: true, error: errMsg }
       }
@@ -271,7 +296,6 @@ app.whenReady().then(() => {
       return { payloadSize: 0, objectCount: 0, configured: true, error: err?.message }
     }
   })
-
 
   // IPC handler to write error logs to a persistent log file
   ipcMain.on('write-log', (_event, { level, message, data }) => {
@@ -296,8 +320,7 @@ app.whenReady().then(() => {
   // This is a fallback when the renderer-side anon key insert fails
   ipcMain.handle('supabase-insert-photo', async (_event, photoPayload) => {
     try {
-      const supabaseUrl =
-        process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
+      const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
       const secretKey =
         process.env.SUPABASE_SECRET_KEY ||
         process.env.VITE_SUPABASE_SECRET_KEY ||
@@ -305,9 +328,7 @@ app.whenReady().then(() => {
         ''
 
       if (!supabaseUrl || !secretKey) {
-        throw new Error(
-          'Supabase URL or secret key not configured in main process environment'
-        )
+        throw new Error('Supabase URL or secret key not configured in main process environment')
       }
 
       console.log(
@@ -330,7 +351,9 @@ app.whenReady().then(() => {
         const logPath = join(app.getPath('userData'), 'supabase_upload_errors.log')
         const timestamp = new Date().toISOString()
         const logLine = `[${timestamp}] [ERROR] Main-process Supabase insert failed for ${photoPayload.file_name} | ${JSON.stringify({ message: error.message, code: error.code, details: error.details, hint: error.hint })}\n`
-        try { appendFileSync(logPath, logLine, 'utf-8') } catch {}
+        try {
+          appendFileSync(logPath, logLine, 'utf-8')
+        } catch {}
         console.error('[Main Supabase] Insert error:', error)
         throw new Error(error.message || 'Supabase insert failed')
       }
@@ -360,8 +383,7 @@ app.whenReady().then(() => {
   // Used by ensureAlbumExists() to recover missing parent albums before photo insert.
   ipcMain.handle('supabase-insert-album', async (_event, albumPayload) => {
     try {
-      const supabaseUrl =
-        process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
+      const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || ''
       const secretKey =
         process.env.SUPABASE_SECRET_KEY ||
         process.env.VITE_SUPABASE_SECRET_KEY ||
@@ -372,7 +394,9 @@ app.whenReady().then(() => {
         throw new Error('Supabase URL or secret key not configured in main process environment')
       }
 
-      console.log(`[Main Supabase] Ensuring album exists in Supabase: id=${albumPayload.id}, name="${albumPayload.name}"`)
+      console.log(
+        `[Main Supabase] Ensuring album exists in Supabase: id=${albumPayload.id}, name="${albumPayload.name}"`
+      )
 
       const { createClient } = await import('@supabase/supabase-js')
       const adminClient = createClient(supabaseUrl, secretKey, {
@@ -390,7 +414,9 @@ app.whenReady().then(() => {
         const logPath = join(app.getPath('userData'), 'supabase_upload_errors.log')
         const timestamp = new Date().toISOString()
         const logLine = `[${timestamp}] [ERROR] Album upsert failed for ${albumPayload.id} | ${JSON.stringify({ message: error.message, code: error.code, hint: error.hint })}\n`
-        try { appendFileSync(logPath, logLine, 'utf-8') } catch {}
+        try {
+          appendFileSync(logPath, logLine, 'utf-8')
+        } catch {}
         console.error('[Main Supabase] Album upsert error:', error)
         throw new Error(error.message || 'Album upsert failed')
       }

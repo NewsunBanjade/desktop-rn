@@ -4,12 +4,23 @@ import { electronAPI } from '@electron-toolkit/preload'
 // Custom APIs for renderer
 const api = {
   getEnv: () => ipcRenderer.sendSync('get-env'),
-  uploadToR2: (fileName: string, fileBuffer: ArrayBuffer, contentType: string) =>
-    ipcRenderer.invoke('upload-to-r2', { fileName, fileBuffer, contentType }),
+  uploadToR2: (
+    fileName: string,
+    fileBuffer: ArrayBuffer | null,
+    contentType: string,
+    filePath?: string
+  ) => ipcRenderer.invoke('upload-to-r2', { fileName, fileBuffer, contentType, filePath }),
   deleteFromR2: (key: string) => ipcRenderer.invoke('delete-from-r2', { key }),
+  generateThumbnail: (args: { filePath: string; fileBuffer: ArrayBuffer | null }) =>
+    ipcRenderer.invoke('generate-thumbnail', args),
   // Get total R2 bucket storage usage via native Cloudflare REST API
   getR2BucketUsage: () =>
-    ipcRenderer.invoke('r2-get-bucket-usage') as Promise<{ payloadSize: number; objectCount: number; configured?: boolean; error?: string }>,
+    ipcRenderer.invoke('r2-get-bucket-usage') as Promise<{
+      payloadSize: number
+      objectCount: number
+      configured?: boolean
+      error?: string
+    }>,
   // Log errors to a file in userData for persistent debugging
   writeLog: (level: 'info' | 'error' | 'warn', message: string, data?: unknown) =>
     ipcRenderer.send('write-log', { level, message, data }),
