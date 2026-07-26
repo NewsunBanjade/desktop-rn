@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { LogOut, CheckCircle2, AlertCircle, X, ChevronDown, ChevronUp, Clock } from 'lucide-react'
+import { LogOut, CheckCircle2, AlertCircle, X, ChevronDown, ChevronUp, Clock, Settings } from 'lucide-react'
 import {
   dbService,
   Album,
@@ -15,6 +15,7 @@ import CreateAlbumModal from './components/CreateAlbumModal'
 import Lightbox from './components/Lightbox'
 import StorageWidget from './components/StorageWidget'
 import { StorageProvider, useStorage } from './StorageContext'
+import SettingsModal from './components/SettingsModal'
 
 interface ToastItem {
   id: string
@@ -46,6 +47,7 @@ function AppInner(): React.JSX.Element {
   const [isCreateAlbumOpen, setIsCreateAlbumOpen] = useState(false)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
   const [toasts, setToasts] = useState<ToastItem[]>([])
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
 
   // Lightbox state
   const [lightboxImages, setLightboxImages] = useState<AlbumImage[] | null>(null)
@@ -320,6 +322,16 @@ function AppInner(): React.JSX.Element {
             <span>{user.email}</span>
           </div>
 
+          {/* Settings button */}
+          <button
+            onClick={(): void => setIsSettingsOpen(true)}
+            className="icon-btn"
+            title="Settings"
+            style={{ marginRight: '8px', cursor: 'pointer' }}
+          >
+            <Settings size={16} />
+          </button>
+
           {/* Logout button */}
           <button onClick={handleLogout} className="icon-btn icon-btn-danger" title="Log Out">
             <LogOut size={16} />
@@ -369,6 +381,17 @@ function AppInner(): React.JSX.Element {
         <CreateAlbumModal
           onClose={(): void => setIsCreateAlbumOpen(false)}
           onSave={handleCreateAlbum}
+        />
+      )}
+
+      {isSettingsOpen && (
+        <SettingsModal
+          onClose={(): void => setIsSettingsOpen(false)}
+          onSave={(): void => {
+            setRefreshTrigger((prev) => prev + 1)
+            refreshStorage()
+          }}
+          addToast={addToast}
         />
       )}
 
