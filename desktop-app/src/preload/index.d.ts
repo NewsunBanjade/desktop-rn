@@ -15,6 +15,9 @@ declare global {
         CLOUDFLARE_R2_PUBLIC_URL?: string
         CLOUDFLARE_R2_S3_ENDPOINT?: string
         CLOUDFLARE_API_TOKEN?: string
+        IS_PACKAGED?: boolean
+        USER_DATA_PATH?: string
+        EXE_DIR_PATH?: string
       }
       uploadToR2: (
         fileName: string,
@@ -36,6 +39,25 @@ declare global {
       writeLog: (level: 'info' | 'error' | 'warn', message: string, data?: unknown) => void
       writePendingStatus: (pendingList: unknown) => void
       supabaseInsertPhoto: (photoPayload: unknown) => Promise<Record<string, unknown>>
+      saveR2Config: (config: {
+        accountId: string
+        bucketName: string
+        publicUrl: string
+        accessKeyId: string
+        secretAccessKey: string
+        apiToken: string
+        supabaseSecretKey: string
+      }) => Promise<{ success: boolean }>
+      getR2Config: () => Promise<{
+        configured: boolean
+        accountId?: string
+        bucketName?: string
+        publicUrl?: string
+        hasAccessKeyId?: boolean
+        hasSecretAccessKey?: boolean
+        hasApiToken?: boolean
+        hasSupabaseSecretKey?: boolean
+      }>
     }
   }
 }

@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useState, useEffect } from 'react'
 import { X, Copy, Check, Database, Settings, ShieldAlert } from 'lucide-react'
 import { getSavedConfig, saveConfig, clearConfig, getSupabase } from '../supabase'
 
@@ -16,9 +16,91 @@ export default function SettingsModal({
   const currentConfig = getSavedConfig()
   const [url, setUrl] = useState(currentConfig.url)
   const [publishableKey, setPublishableKey] = useState(currentConfig.publishableKey)
-  const [activeTab, setActiveTab] = useState<'config' | 'sql'>('config')
+  const [activeTab, setActiveTab] = useState<'config' | 'r2' | 'sql'>('config')
   const [isTesting, setIsTesting] = useState(false)
   const [isCopied, setIsCopied] = useState(false)
+
+  const [envInfo, setEnvInfo] = useState<{
+    IS_PACKAGED?: boolean
+    USER_DATA_PATH?: string
+    EXE_DIR_PATH?: string
+  } | null>(null)
+
+  const [r2AccountId, setR2AccountId] = useState('')
+  const [r2BucketName, setR2BucketName] = useState('')
+  const [r2PublicUrl, setR2PublicUrl] = useState('')
+  const [r2AccessKeyId, setR2AccessKeyId] = useState('')
+  const [r2SecretAccessKey, setR2SecretAccessKey] = useState('')
+  const [r2ApiToken, setR2ApiToken] = useState('')
+  const [supabaseSecretKey, setSupabaseSecretKey] = useState('')
+  const [r2ConfiguredStatus, setR2ConfiguredStatus] = useState<any>(null)
+  const [isSavingR2, setIsSavingR2] = useState(false)
+
+  useEffect(() => {
+    if (window.api && typeof window.api.getEnv === 'function') {
+      try {
+        const env = window.api.getEnv()
+        setEnvInfo({
+          IS_PACKAGED: env.IS_PACKAGED,
+          USER_DATA_PATH: env.USER_DATA_PATH,
+          EXE_DIR_PATH: env.EXE_DIR_PATH
+        })
+      } catch (e) {
+        console.error('Failed to load env info:', e)
+      }
+    }
+
+    if (window.api && typeof (window.api as any).getR2Config === 'function') {
+      ;(window.api as any)
+        .getR2Config()
+        .then((config) => {
+          if (config && config.configured) {
+            setR2AccountId(config.accountId || '')
+            setR2BucketName(config.bucketName || '')
+            setR2PublicUrl(config.publicUrl || '')
+            setR2ConfiguredStatus(config)
+          }
+        })
+        .catch((err) => console.error('Failed to load R2 config:', err))
+    }
+  }, [])
+
+  const handleSaveR2 = async (e: React.FormEvent): Promise<void> => {
+    e.preventDefault()
+    if (!window.api || typeof (window.api as any).saveR2Config !== 'function') {
+      addToast('Secure configuration is not supported in this environment.', 'error')
+      return
+    }
+
+    setIsSavingR2(true)
+    try {
+      const res = await (window.api as any).saveR2Config({
+        accountId: r2AccountId.trim(),
+        bucketName: r2BucketName.trim(),
+        publicUrl: r2PublicUrl.trim(),
+        accessKeyId: r2AccessKeyId.trim(),
+        secretAccessKey: r2SecretAccessKey.trim(),
+        apiToken: r2ApiToken.trim(),
+        supabaseSecretKey: supabaseSecretKey.trim()
+      })
+      if (res && res.success) {
+        addToast('R2 and secret configuration saved securely!', 'success')
+        // Clear password inputs
+        setR2AccessKeyId('')
+        setR2SecretAccessKey('')
+        setR2ApiToken('')
+        setSupabaseSecretKey('')
+
+        // Reload status
+        const config = await (window.api as any).getR2Config()
+        setR2ConfiguredStatus(config)
+      }
+    } catch (err: any) {
+      addToast(`Failed to save secure configuration: ${err.message}`, 'error')
+    } finally {
+      setIsSavingR2(false)
+    }
+  }
 
   const handleSave = (e: React.FormEvent): void => {
     e.preventDefault()
@@ -161,7 +243,13 @@ ON public.photos FOR SELECT TO public USING (true);`
             className={`settings-tab ${activeTab === 'config' ? 'settings-tab-active' : ''}`}
             onClick={(): void => setActiveTab('config')}
           >
-            Connection Configuration
+            Supabase Client Connection
+          </button>
+          <button
+            className={`settings-tab ${activeTab === 'r2' ? 'settings-tab-active' : ''}`}
+            onClick={(): void => setActiveTab('r2')}
+          >
+            Cloudflare R2 &amp; Secrets
           </button>
           <button
             className={`settings-tab ${activeTab === 'sql' ? 'settings-tab-active' : ''}`}
@@ -171,7 +259,7 @@ ON public.photos FOR SELECT TO public USING (true);`
           </button>
         </div>
 
-        {activeTab === 'config' ? (
+        {activeTab === 'config' && (
           <form onSubmit={handleSave}>
             <div className="status-bar" style={{ marginBottom: '20px' }}>
               <div className="status-indicator">
@@ -262,7 +350,165 @@ ON public.photos FOR SELECT TO public USING (true);`
               </button>
             </div>
           </form>
-        ) : (
+        )}
+
+        {activeTab === 'r2' && (
+          <form onSubmit={handleSaveR2}>
+            <div className="status-bar status-bar-supabase" style={{ marginBottom: '16px', background: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.2)' }}>
+              <div className="status-indicator">
+                <Database size={16} style={{ color: 'var(--accent-light)' }} />
+                <span style={{ fontSize: '12px' }}>
+                  These administrative credentials are <strong>encrypted locally</strong> using Electron's native OS-level encryption keychains (Keychain / DPAPI). They are never exposed to the frontend browser context.
+                </span>
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">Cloudflare R2 Account ID</label>
+                <input
+                  type="text"
+                  placeholder="e.g. 5d57b2..."
+                  className="form-input"
+                  style={{ paddingLeft: '14px' }}
+                  value={r2AccountId}
+                  onChange={(e): void => setR2AccountId(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">R2 Bucket Name</label>
+                <input
+                  type="text"
+                  placeholder="e.g. imagecdn"
+                  className="form-input"
+                  style={{ paddingLeft: '14px' }}
+                  value={r2BucketName}
+                  onChange={(e): void => setR2BucketName(e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+
+            <div className="form-group" style={{ marginTop: '12px' }}>
+              <label className="form-label">R2 Public Bucket URL (CDN)</label>
+              <input
+                type="text"
+                placeholder="https://pub-xxxxxx.r2.dev or https://cdn.yourdomain.com"
+                className="form-input"
+                style={{ paddingLeft: '14px' }}
+                value={r2PublicUrl}
+                onChange={(e): void => setR2PublicUrl(e.target.value)}
+                required
+              />
+            </div>
+
+            <hr style={{ border: '0', borderTop: '1px solid var(--border-color)', margin: '16px 0' }} />
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">
+                  R2 Access Key ID{' '}
+                  {r2ConfiguredStatus?.hasAccessKeyId && (
+                    <span style={{ color: 'var(--success)', fontSize: '11px' }}> (Saved)</span>
+                  )}
+                </label>
+                <input
+                  type="password"
+                  placeholder={r2ConfiguredStatus?.hasAccessKeyId ? '••••••••••••••••••••' : 'Enter access key id'}
+                  className="form-input"
+                  style={{ paddingLeft: '14px' }}
+                  value={r2AccessKeyId}
+                  onChange={(e): void => setR2AccessKeyId(e.target.value)}
+                  required={!r2ConfiguredStatus?.hasAccessKeyId}
+                />
+              </div>
+
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">
+                  R2 Secret Access Key{' '}
+                  {r2ConfiguredStatus?.hasSecretAccessKey && (
+                    <span style={{ color: 'var(--success)', fontSize: '11px' }}> (Saved)</span>
+                  )}
+                </label>
+                <input
+                  type="password"
+                  placeholder={r2ConfiguredStatus?.hasSecretAccessKey ? '••••••••••••••••••••' : 'Enter secret access key'}
+                  className="form-input"
+                  style={{ paddingLeft: '14px' }}
+                  value={r2SecretAccessKey}
+                  onChange={(e): void => setR2SecretAccessKey(e.target.value)}
+                  required={!r2ConfiguredStatus?.hasSecretAccessKey}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px', marginTop: '12px' }}>
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">
+                  Cloudflare API Token{' '}
+                  {r2ConfiguredStatus?.hasApiToken && (
+                    <span style={{ color: 'var(--success)', fontSize: '11px' }}> (Saved)</span>
+                  )}
+                </label>
+                <input
+                  type="password"
+                  placeholder={r2ConfiguredStatus?.hasApiToken ? '••••••••••••••••••••' : 'Enter API token'}
+                  className="form-input"
+                  style={{ paddingLeft: '14px' }}
+                  value={r2ApiToken}
+                  onChange={(e): void => setR2ApiToken(e.target.value)}
+                  required={!r2ConfiguredStatus?.hasApiToken}
+                />
+              </div>
+
+              <div className="form-group" style={{ margin: 0 }}>
+                <label className="form-label">
+                  Supabase Service Role/Secret Key{' '}
+                  {r2ConfiguredStatus?.hasSupabaseSecretKey && (
+                    <span style={{ color: 'var(--success)', fontSize: '11px' }}> (Saved)</span>
+                  )}
+                </label>
+                <input
+                  type="password"
+                  placeholder={r2ConfiguredStatus?.hasSupabaseSecretKey ? '••••••••••••••••••••' : 'Enter service role key'}
+                  className="form-input"
+                  style={{ paddingLeft: '14px' }}
+                  value={supabaseSecretKey}
+                  onChange={(e): void => setSupabaseSecretKey(e.target.value)}
+                  required={!r2ConfiguredStatus?.hasSupabaseSecretKey}
+                />
+              </div>
+            </div>
+
+            <div
+              className="modal-footer"
+              style={{
+                marginTop: '20px',
+                borderTop: '1px solid var(--border-color)',
+                paddingTop: '16px',
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: '12px'
+              }}
+            >
+              <button
+                type="button"
+                className="btn btn-secondary"
+                style={{ width: '100px' }}
+                onClick={onClose}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="btn btn-primary" style={{ width: '150px' }} disabled={isSavingR2}>
+                {isSavingR2 ? 'Saving...' : 'Save R2 Config'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {activeTab === 'sql' && (
           <div>
             <div className="status-bar status-bar-supabase" style={{ marginBottom: '20px' }}>
               <div className="status-indicator">
@@ -296,6 +542,46 @@ ON public.photos FOR SELECT TO public USING (true);`
                 <li>
                   Configure the environment variables (e.g. in your <code>.env</code> file) with
                   your Cloudflare R2 account ID, credentials, bucket name, and public URL.
+                  {envInfo && (
+                    <div
+                      style={{
+                        marginTop: '8px',
+                        padding: '10px',
+                        borderRadius: '6px',
+                        backgroundColor: 'rgba(255, 255, 255, 0.03)',
+                        border: '1px solid var(--border-color)',
+                        fontSize: '12px',
+                        color: 'var(--text-secondary)'
+                      }}
+                    >
+                      <strong style={{ color: 'var(--text-primary)' }}>
+                        Active searches for <code>.env</code>:
+                      </strong>
+                      <ul style={{ margin: '4px 0 0 16px', padding: 0, listStyleType: 'disc' }}>
+                        {envInfo.IS_PACKAGED ? (
+                          <>
+                            <li style={{ marginTop: '2px' }}>
+                              Next to App Executable (Recommended):{' '}
+                              <code style={{ color: 'var(--accent-light)', wordBreak: 'break-all' }}>
+                                {envInfo.EXE_DIR_PATH}/.env
+                              </code>
+                            </li>
+                            <li style={{ marginTop: '2px' }}>
+                              User Application Data folder:{' '}
+                              <code style={{ color: 'var(--accent-light)', wordBreak: 'break-all' }}>
+                                {envInfo.USER_DATA_PATH}/.env
+                              </code>
+                            </li>
+                          </>
+                        ) : (
+                          <li>
+                            Project Root Directory (Development):{' '}
+                            <code style={{ color: 'var(--accent-light)' }}>.env</code>
+                          </li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
                 </li>
                 <li>
                   Make sure the <code>featured_photo</code> table is created in Supabase using the
