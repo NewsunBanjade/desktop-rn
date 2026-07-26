@@ -13,7 +13,6 @@ import Dashboard from './components/Dashboard'
 import AlbumDetail from './components/AlbumDetail'
 import CreateAlbumModal from './components/CreateAlbumModal'
 import Lightbox from './components/Lightbox'
-import Versions from './components/Versions'
 import StorageWidget from './components/StorageWidget'
 import { StorageProvider, useStorage } from './StorageContext'
 
@@ -364,9 +363,6 @@ function AppInner(): React.JSX.Element {
           />
         )}
       </main>
-
-      {/* Footer system details */}
-      <Versions />
 
       {/* Modals & Dialogs */}
       {isCreateAlbumOpen && (
