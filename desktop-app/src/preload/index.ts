@@ -29,7 +29,11 @@ const api = {
     ipcRenderer.send('write-pending-status', pendingList),
   // Insert a photo row into Supabase using the main-process secret key (fallback)
   supabaseInsertPhoto: (photoPayload: unknown) =>
-    ipcRenderer.invoke('supabase-insert-photo', photoPayload)
+    ipcRenderer.invoke('supabase-insert-photo', photoPayload),
+  // Save secure R2 and Supabase Secret key credentials
+  saveR2Config: (config: unknown) => ipcRenderer.invoke('save-r2-config', config),
+  // Retrieve safe R2 config status (masked secrets)
+  getR2Config: () => ipcRenderer.invoke('get-r2-config')
 }
 
 // Use `contextBridge` APIs to expose Electron APIs to

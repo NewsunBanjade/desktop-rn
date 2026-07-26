@@ -1,5 +1,5 @@
-import { app, shell, BrowserWindow, ipcMain } from 'electron'
-import { join } from 'path'
+import { app, shell, BrowserWindow, ipcMain, safeStorage } from 'electron'
+import { join, dirname } from 'path'
 import { existsSync, readFileSync, appendFileSync, writeFileSync } from 'fs'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
@@ -9,7 +9,8 @@ function loadLocalEnv(): void {
   const paths = [
     join(process.cwd(), '.env'),
     join(app.getAppPath(), '.env'),
-    join(app.getPath('userData'), '.env')
+    join(app.getPath('userData'), '.env'),
+    join(dirname(process.execPath), '.env')
   ]
   for (const p of paths) {
     if (existsSync(p)) {
@@ -34,6 +35,85 @@ function loadLocalEnv(): void {
       } catch (err) {
         console.error('Failed to load env file from:', p, err)
       }
+    }
+  }
+}
+
+interface SecureConfig {
+  CLOUDFLARE_R2_ACCOUNT_ID?: string
+  CLOUDFLARE_R2_ACCESS_KEY_ID_ENC?: string
+  CLOUDFLARE_R2_SECRET_ACCESS_KEY_ENC?: string
+  CLOUDFLARE_R2_BUCKET_NAME?: string
+  CLOUDFLARE_R2_PUBLIC_URL?: string
+  CLOUDFLARE_API_TOKEN_ENC?: string
+  SUPABASE_SECRET_KEY_ENC?: string
+}
+
+function decryptField(encryptedBase64: string | undefined): string {
+  if (!encryptedBase64) return ''
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      const buffer = Buffer.from(encryptedBase64, 'base64')
+      return safeStorage.decryptString(buffer)
+    } else {
+      return Buffer.from(encryptedBase64, 'base64').toString('utf-8')
+    }
+  } catch (e) {
+    console.error('[Secure Config] Failed to decrypt field:', e)
+    return ''
+  }
+}
+
+function encryptField(plainText: string): string {
+  if (!plainText) return ''
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      const buffer = safeStorage.encryptString(plainText)
+      return buffer.toString('base64')
+    } else {
+      return Buffer.from(plainText, 'utf-8').toString('base64')
+    }
+  } catch (e) {
+    console.error('[Secure Config] Failed to encrypt field:', e)
+    return ''
+  }
+}
+
+function loadSecureConfig(): void {
+  const configPath = join(app.getPath('userData'), 'secure_r2_config.json')
+  if (existsSync(configPath)) {
+    try {
+      const raw = readFileSync(configPath, 'utf-8')
+      const config: SecureConfig = JSON.parse(raw)
+
+      if (config.CLOUDFLARE_R2_ACCOUNT_ID) {
+        process.env.CLOUDFLARE_R2_ACCOUNT_ID = config.CLOUDFLARE_R2_ACCOUNT_ID
+      }
+      if (config.CLOUDFLARE_R2_BUCKET_NAME) {
+        process.env.CLOUDFLARE_R2_BUCKET_NAME = config.CLOUDFLARE_R2_BUCKET_NAME
+      }
+      if (config.CLOUDFLARE_R2_PUBLIC_URL) {
+        process.env.CLOUDFLARE_R2_PUBLIC_URL = config.CLOUDFLARE_R2_PUBLIC_URL
+      }
+
+      const accessKeyId = decryptField(config.CLOUDFLARE_R2_ACCESS_KEY_ID_ENC)
+      if (accessKeyId) process.env.CLOUDFLARE_R2_ACCESS_KEY_ID = accessKeyId
+
+      const secretAccessKey = decryptField(config.CLOUDFLARE_R2_SECRET_ACCESS_KEY_ENC)
+      if (secretAccessKey) process.env.CLOUDFLARE_R2_SECRET_ACCESS_KEY = secretAccessKey
+
+      const apiToken = decryptField(config.CLOUDFLARE_API_TOKEN_ENC)
+      if (apiToken) process.env.CLOUDFLARE_API_TOKEN = apiToken
+
+      const supabaseSecretKey = decryptField(config.SUPABASE_SECRET_KEY_ENC)
+      if (supabaseSecretKey) {
+        process.env.SUPABASE_SECRET_KEY = supabaseSecretKey
+        process.env.SUPABASE_SERVICE_ROLE_KEY = supabaseSecretKey
+      }
+
+      console.log('[Secure Config] Loaded and decrypted secure configuration from disk')
+    } catch (e) {
+      console.error('[Secure Config] Failed to load secure config:', e)
     }
   }
 }
@@ -76,6 +156,8 @@ function createWindow(): void {
 app.whenReady().then(() => {
   // Load env variables
   loadLocalEnv()
+  // Load secure configs from encrypted disk file
+  loadSecureConfig()
 
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.electron')
@@ -138,7 +220,82 @@ app.whenReady().then(() => {
         process.env.VITE_SUPABASE_ANON_KEY ||
         '',
       CLOUDFLARE_R2_PUBLIC_URL:
-        process.env.CLOUDFLARE_R2_PUBLIC_URL || process.env.VITE_CLOUDFLARE_R2_PUBLIC_URL || ''
+        process.env.CLOUDFLARE_R2_PUBLIC_URL || process.env.VITE_CLOUDFLARE_R2_PUBLIC_URL || '',
+      IS_PACKAGED: app.isPackaged,
+      USER_DATA_PATH: app.getPath('userData'),
+      EXE_DIR_PATH: dirname(process.execPath)
+    }
+  })
+
+  // IPC handler to save secure config credentials (uses Electron's safeStorage API)
+  ipcMain.handle('save-r2-config', async (_event, config) => {
+    try {
+      const configPath = join(app.getPath('userData'), 'secure_r2_config.json')
+      let existing: SecureConfig = {}
+      if (existsSync(configPath)) {
+        try {
+          existing = JSON.parse(readFileSync(configPath, 'utf-8'))
+        } catch {}
+      }
+
+      const secureConfig: SecureConfig = {
+        CLOUDFLARE_R2_ACCOUNT_ID: config.accountId,
+        CLOUDFLARE_R2_BUCKET_NAME: config.bucketName,
+        CLOUDFLARE_R2_PUBLIC_URL: config.publicUrl,
+        CLOUDFLARE_R2_ACCESS_KEY_ID_ENC: config.accessKeyId
+          ? encryptField(config.accessKeyId)
+          : existing.CLOUDFLARE_R2_ACCESS_KEY_ID_ENC || '',
+        CLOUDFLARE_R2_SECRET_ACCESS_KEY_ENC: config.secretAccessKey
+          ? encryptField(config.secretAccessKey)
+          : existing.CLOUDFLARE_R2_SECRET_ACCESS_KEY_ENC || '',
+        CLOUDFLARE_API_TOKEN_ENC: config.apiToken
+          ? encryptField(config.apiToken)
+          : existing.CLOUDFLARE_API_TOKEN_ENC || '',
+        SUPABASE_SECRET_KEY_ENC: config.supabaseSecretKey
+          ? encryptField(config.supabaseSecretKey)
+          : existing.SUPABASE_SECRET_KEY_ENC || ''
+      }
+
+      writeFileSync(configPath, JSON.stringify(secureConfig, null, 2), 'utf-8')
+
+      // Reload credentials into environment variables for immediate use
+      loadSecureConfig()
+
+      return { success: true }
+    } catch (error: any) {
+      console.error('[Secure Config] Save failed:', error)
+      throw new Error(error.message || 'Failed to save secure configuration')
+    }
+  })
+
+  // IPC handler to return masked secure configuration status (without returning secret keys)
+  ipcMain.handle('get-r2-config', async () => {
+    try {
+      const configPath = join(app.getPath('userData'), 'secure_r2_config.json')
+      if (!existsSync(configPath)) {
+        return { configured: false }
+      }
+      const raw = readFileSync(configPath, 'utf-8')
+      const config: SecureConfig = JSON.parse(raw)
+
+      const accessKeyId = decryptField(config.CLOUDFLARE_R2_ACCESS_KEY_ID_ENC)
+      const secretAccessKey = decryptField(config.CLOUDFLARE_R2_SECRET_ACCESS_KEY_ENC)
+      const apiToken = decryptField(config.CLOUDFLARE_API_TOKEN_ENC)
+      const supabaseSecretKey = decryptField(config.SUPABASE_SECRET_KEY_ENC)
+
+      return {
+        configured: true,
+        accountId: config.CLOUDFLARE_R2_ACCOUNT_ID || '',
+        bucketName: config.CLOUDFLARE_R2_BUCKET_NAME || '',
+        publicUrl: config.CLOUDFLARE_R2_PUBLIC_URL || '',
+        hasAccessKeyId: !!accessKeyId,
+        hasSecretAccessKey: !!secretAccessKey,
+        hasApiToken: !!apiToken,
+        hasSupabaseSecretKey: !!supabaseSecretKey
+      }
+    } catch (e) {
+      console.error('[Secure Config] Get status failed:', e)
+      return { configured: false }
     }
   })
 
